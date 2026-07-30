@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Planejamento em lote{% endblock %}
+{% block content %}
+
+<div class="card">
+    <h3>Planejamento em lote por pregão</h3>
+    <p><small class="ajuda">Escolha um pregão para lançar (ou revisar) de uma vez a quantidade planejada de todos os itens de todas as suas atas, para todos os centros de custo.</small></p>
+    <table>
+        <thead><tr><th>Pregão</th><th class="num">Atas vinculadas</th><th></th></tr></thead>
+        <tbody>
+        {% for p in pregoes %}
+            <tr>
+                <td>{{ p.numero_compra }}/{{ p.ano_compra }}</td>
+                <td class="num">{{ p.qtd_atas }}</td>
+                <td><a class="btn" href="{{ url_for('planejamento_lote_grade', pregao_id=p.numero_controle_pncp_compra) }}">Abrir planejamento</a></td>
+            </tr>
+        {% else %}
+            <tr><td colspan="3">Nenhum pregão sincronizado ainda. Sincronize a API na tela de Saldos.</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

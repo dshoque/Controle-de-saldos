@@ -106,7 +106,12 @@ def id_campo_quantidade(numero_ata, numero_item):
     return "qtd_" + numero_ata.replace("/", "-") + "_" + numero_item
 
 
+def campo_planejamento(centro_codigo, numero_ata, numero_item):
+    return "pl_" + centro_codigo.replace(" ", "_") + "__" + numero_ata.replace("/", "-") + "_" + numero_item
+
+
 app.jinja_env.globals["id_campo_quantidade"] = id_campo_quantidade
+app.jinja_env.globals["campo_planejamento"] = campo_planejamento
 
 
 # ------------------------------------------------------------------ rotas --
@@ -261,6 +266,93 @@ def centro_custo_regenerar_token(codigo):
     finally:
         conn.close()
     return redirect(url_for("planejamento"))
+
+
+# ------------------------------------------------------ planejamento em lote (por pregão) --
+
+@app.route("/planejamento/lote")
+@requer_login
+def planejamento_lote_lista():
+    conn = db.get_conn()
+    try:
+        pregoes = conn.execute("""
+            SELECT numero_controle_pncp_compra, numero_compra, ano_compra, COUNT(*) AS qtd_atas
+            FROM arps
+            WHERE uasg = %s AND numero_controle_pncp_compra IS NOT NULL AND numero_controle_pncp_compra <> ''
+            GROUP BY numero_controle_pncp_compra, numero_compra, ano_compra
+            ORDER BY ano_compra DESC, numero_compra DESC
+        """, (UASG_PADRAO,)).fetchall()
+        return render_template("planejamento_lote_lista.html", pregoes=pregoes)
+    finally:
+        conn.close()
+
+
+@app.route("/planejamento/lote/<path:pregao_id>", methods=["GET", "POST"])
+@requer_login
+def planejamento_lote_grade(pregao_id):
+    conn = db.get_conn()
+    try:
+        pregao = conn.execute("""
+            SELECT numero_controle_pncp_compra, numero_compra, ano_compra, COUNT(*) AS qtd_atas
+            FROM arps WHERE uasg=%s AND numero_controle_pncp_compra=%s
+            GROUP BY numero_controle_pncp_compra, numero_compra, ano_compra
+        """, (UASG_PADRAO, pregao_id)).fetchone()
+        if not pregao:
+            abort(404)
+
+        centros = conn.execute(
+            "SELECT * FROM centros_custo ORDER BY ordem NULLS LAST, codigo"
+        ).fetchall()
+
+        if request.method == "POST":
+            ts = db.agora()
+            itens_do_pregao = conn.execute("""
+                SELECT i.numero_ata, i.numero_item
+                FROM itens i JOIN arps a ON a.numero_ata = i.numero_ata AND a.uasg = i.uasg
+                WHERE i.uasg = %s AND a.numero_controle_pncp_compra = %s
+            """, (UASG_PADRAO, pregao_id)).fetchall()
+
+            salvos = 0
+            for item in itens_do_pregao:
+                for centro in centros:
+                    campo = campo_planejamento(centro["codigo"], item["numero_ata"], item["numero_item"])
+                    valor = request.form.get(campo, "").strip().replace(",", ".")
+                    if not valor:
+                        continue
+                    try:
+                        quantidade = float(valor)
+                    except ValueError:
+                        continue
+                    conn.execute("""
+                        INSERT INTO planejamento (numero_ata, uasg, numero_item, centro_custo, quantidade_planejada, criado_em, atualizado_em)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (numero_ata, uasg, numero_item, centro_custo) DO UPDATE SET
+                            quantidade_planejada = excluded.quantidade_planejada, atualizado_em = excluded.atualizado_em
+                    """, (item["numero_ata"], UASG_PADRAO, item["numero_item"], centro["codigo"], quantidade, ts, ts))
+                    salvos += 1
+            conn.commit()
+            flash(f"{salvos} célula(s) salva(s).", "sucesso")
+            return redirect(url_for("planejamento_lote_grade", pregao_id=pregao_id))
+
+        itens = conn.execute("""
+            SELECT i.numero_ata, i.numero_item, i.descricao, i.unidade AS fornecedor, i.quantidade_homologada
+            FROM itens i JOIN arps a ON a.numero_ata = i.numero_ata AND a.uasg = i.uasg
+            WHERE i.uasg = %s AND a.numero_controle_pncp_compra = %s
+            ORDER BY i.numero_ata, i.numero_item
+        """, (UASG_PADRAO, pregao_id)).fetchall()
+
+        planos_existentes = conn.execute("""
+            SELECT p.numero_ata, p.numero_item, p.centro_custo, p.quantidade_planejada
+            FROM planejamento p JOIN arps a ON a.numero_ata = p.numero_ata AND a.uasg = p.uasg
+            WHERE p.uasg = %s AND a.numero_controle_pncp_compra = %s
+        """, (UASG_PADRAO, pregao_id)).fetchall()
+        valores = {(p["numero_ata"], p["numero_item"], p["centro_custo"]): p["quantidade_planejada"]
+                   for p in planos_existentes}
+
+        return render_template("planejamento_lote_grade.html", pregao=pregao, centros=centros,
+                                itens=itens, valores=valores)
+    finally:
+        conn.close()
 
 
 # ------------------------------------------------------------ novo pedido --

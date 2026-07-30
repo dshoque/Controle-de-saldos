@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}Planejamento — Pregão {{ pregao.numero_compra }}/{{ pregao.ano_compra }}{% endblock %}
+{% block content %}
+
+<div class="card">
+    <div class="toolbar" style="justify-content: space-between;">
+        <div>
+            <strong>Pregão {{ pregao.numero_compra }}/{{ pregao.ano_compra }}</strong>
+            — {{ pregao.qtd_atas }} ata(s), {{ itens|length }} item(ns)
+        </div>
+        <a href="{{ url_for('planejamento_lote_lista') }}" class="btn secundario">Voltar</a>
+    </div>
+    <p><small class="ajuda">Preencha a quantidade planejada de cada item para cada centro de custo. Deixe em branco o que não quiser alterar — célula vazia não mexe no que já estava salvo. O total da linha é conferido ao vivo contra o homologado, mas não impede salvar.</small></p>
+</div>
+
+<div class="card">
+    <div class="toolbar">
+        <input type="text" id="busca" placeholder="Buscar item por descrição, ata ou número..." style="min-width:320px" oninput="filtrarLinhas()">
+    </div>
+
+    <form method="post">
+        <div style="overflow-x:auto;">
+        <table id="tabela-grade">
+            <thead>
+                <tr>
+                    <th>Ata</th><th>Item</th><th>Descrição</th><th>Fornecedor</th>
+                    <th class="num">Homologado</th><th class="num">Total lançado</th>
+                    {% for c in centros %}
+                    <th title="{{ c.nome }}">{{ c.codigo }}</th>
+                    {% endfor %}
+                </tr>
+            </thead>
+            <tbody>
+            {% for it in itens %}
+                {% set linha_id = it.numero_ata ~ "_" ~ it.numero_item %}
+                <tr data-busca="{{ (it.descricao or '')|lower }} {{ it.numero_ata }} {{ it.numero_item }}">
+                    <td>{{ it.numero_ata }}</td>
+                    <td>{{ it.numero_item }}</td>
+                    <td>{{ it.descricao or "—" }}</td>
+                    <td><small>{{ it.fornecedor or "—" }}</small></td>
+                    <td class="num">{{ "%.2f"|format(it.quantidade_homologada or 0) }}</td>
+                    <td class="num" id="total-{{ linha_id }}" data-homologado="{{ it.quantidade_homologada or 0 }}">0.00</td>
+                    {% for c in centros %}
+                        {% set campo = campo_planejamento(c.codigo, it.numero_ata, it.numero_item) %}
+                        {% set atual = valores.get((it.numero_ata, it.numero_item, c.codigo)) %}
+                        <td>
+                            <input type="number" min="0" step="any" name="{{ campo }}" id="{{ campo }}"
+                                   value="{{ ('%.2f'|format(atual)) if atual is not none else '' }}"
+                                   placeholder="—" data-linha="{{ linha_id }}"
+                                   oninput="recalcularLinha('{{ linha_id }}')" style="width:80px;">
+                        </td>
+                    {% endfor %}
+                </tr>
+            {% else %}
+                <tr><td colspan="{{ 6 + centros|length }}">Nenhum item encontrado para este pregão.</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        </div>
+        <div style="margin-top:16px;">
+            <button type="submit">Salvar planejamento</button>
+        </div>
+    </form>
+</div>
+
+<script>
+    function filtrarLinhas() {
+        const termo = document.getElementById('busca').value.toLowerCase();
+        document.querySelectorAll('#tabela-grade tbody tr').forEach(function (tr) {
+            const alvo = tr.getAttribute('data-busca') || '';
+            tr.style.display = alvo.includes(termo) ? '' : 'none';
+        });
+    }
+
+    function recalcularLinha(linhaId) {
+        const inputs = document.querySelectorAll('input[data-linha="' + linhaId + '"]');
+        let total = 0;
+        inputs.forEach(function (inp) {
+            total += parseFloat((inp.value || '0').replace(',', '.')) || 0;
+        });
+        const celulaTotal = document.getElementById('total-' + linhaId);
+        const homologado = parseFloat(celulaTotal.getAttribute('data-homologado')) || 0;
+        celulaTotal.textContent = total.toFixed(2);
+        celulaTotal.style.color = total - homologado > 0.0001 ? '#a71d2a' : '';
+        celulaTotal.style.fontWeight = total - homologado > 0.0001 ? '700' : '';
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+        document.querySelectorAll('#tabela-grade tbody tr').forEach(function (tr) {
+            const primeiraLinha = tr.querySelector('input[data-linha]');
+            if (primeiraLinha) recalcularLinha(primeiraLinha.getAttribute('data-linha'));
+        });
+    });
+</script>
+{% endblock %}

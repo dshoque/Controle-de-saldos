@@ -54,6 +54,11 @@ CREATE TABLE IF NOT EXISTS centros_custo (
     token TEXT UNIQUE
 );
 
+ALTER TABLE arps ADD COLUMN IF NOT EXISTS numero_compra TEXT;
+ALTER TABLE arps ADD COLUMN IF NOT EXISTS ano_compra TEXT;
+ALTER TABLE arps ADD COLUMN IF NOT EXISTS numero_controle_pncp_compra TEXT;
+ALTER TABLE centros_custo ADD COLUMN IF NOT EXISTS ordem INTEGER;
+
 CREATE TABLE IF NOT EXISTS planejamento (
     id SERIAL PRIMARY KEY,
     numero_ata TEXT NOT NULL,

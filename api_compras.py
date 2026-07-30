@@ -97,15 +97,19 @@ def sincronizar(uasg="153010"):
                 continue
             conn.execute("""
                 INSERT INTO arps (numero_ata, uasg, numero_controle_pncp_ata, fornecedor, cnpj_fornecedor,
-                                   data_vigencia_inicio, data_vigencia_fim, atualizado_em)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                                   data_vigencia_inicio, data_vigencia_fim, atualizado_em,
+                                   numero_compra, ano_compra, numero_controle_pncp_compra)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT(numero_ata, uasg) DO UPDATE SET
                     numero_controle_pncp_ata=excluded.numero_controle_pncp_ata,
                     fornecedor=excluded.fornecedor,
                     cnpj_fornecedor=excluded.cnpj_fornecedor,
                     data_vigencia_inicio=excluded.data_vigencia_inicio,
                     data_vigencia_fim=excluded.data_vigencia_fim,
-                    atualizado_em=excluded.atualizado_em
+                    atualizado_em=excluded.atualizado_em,
+                    numero_compra=excluded.numero_compra,
+                    ano_compra=excluded.ano_compra,
+                    numero_controle_pncp_compra=excluded.numero_controle_pncp_compra
             """, (
                 numero_ata, str(uasg),
                 str(a.get("numeroControlePncpAta") or ""),
@@ -114,6 +118,9 @@ def sincronizar(uasg="153010"):
                 a.get("dataVigenciaInicial") or "",
                 a.get("dataVigenciaFinal") or "",
                 ts,
+                str(a.get("numeroCompra") or ""),
+                str(a.get("anoCompra") or ""),
+                str(a.get("numeroControlePncpCompra") or ""),
             ))
 
         itens = consultar_arp_itens(uasg)

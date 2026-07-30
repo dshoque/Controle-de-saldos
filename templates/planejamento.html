@@ -20,10 +20,20 @@
 </div>
 {% endif %}
 
+<div class="card" style="border-color: var(--azul);">
+    <div class="toolbar" style="justify-content: space-between;">
+        <div>
+            <strong>Planejamento em lote por pregão</strong>
+            <small class="ajuda" style="margin-top:2px;">Para pregões grandes: carrega todos os itens de todas as atas de uma vez e lança as quantidades para todos os centros de custo numa grade só.</small>
+        </div>
+        <a href="{{ url_for('planejamento_lote_lista') }}" class="btn">Abrir planejamento em lote</a>
+    </div>
+</div>
+
 <div class="grid grid-2">
     <div class="card">
         <h3>Novo lançamento de planejamento</h3>
-        <p><small class="ajuda">Preenchido uma única vez por item × centro de custo, na adjudicação da ata. A soma de todos os centros de custo para um item deve bater com o quantitativo homologado.</small></p>
+        <p><small class="ajuda">Para ajustes pontuais de um único item/centro de custo (para lançar um pregão inteiro, use o "Planejamento em lote" acima). A soma de todos os centros de custo para um item deve bater com o quantitativo homologado.</small></p>
         <form method="post" action="{{ url_for('planejamento_novo') }}" class="grid" style="gap:10px;">
             <div>
                 <label>Item da ata</label><br>
