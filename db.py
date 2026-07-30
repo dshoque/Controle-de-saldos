@@ -90,6 +90,10 @@ CREATE TABLE IF NOT EXISTS solicitacoes (
     criado_em TEXT
 );
 
+ALTER TABLE solicitacoes ADD COLUMN IF NOT EXISTS numero_controle_pncp_compra TEXT;
+ALTER TABLE solicitacoes ADD COLUMN IF NOT EXISTS nome_arquivo_cessao TEXT;
+ALTER TABLE solicitacoes ADD COLUMN IF NOT EXISTS conteudo_cessao_pdf BYTEA;
+
 CREATE TABLE IF NOT EXISTS pedidos (
     id SERIAL PRIMARY KEY,
     solicitacao_id INTEGER REFERENCES solicitacoes(id),

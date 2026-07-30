@@ -34,11 +34,14 @@
                 </td>
                 <td>
                     {% if p.tem_pdf %}
-                    <a href="{{ url_for('solicitacao_pdf', solicitacao_id=p.solicitacao_id) }}" target="_blank">
-                        <small>{{ p.nome_arquivo_pdf or "PDF" }}</small>
-                    </a>
+                    <a class="btn secundario" href="{{ url_for('solicitacao_pdf', solicitacao_id=p.solicitacao_id) }}" target="_blank"
+                       title="{{ p.nome_arquivo_pdf }}">Ver PDF</a>
                     {% else %}
-                    <small>{{ p.nome_arquivo_pdf or "—" }}</small>
+                    <small>{{ p.nome_arquivo_pdf or "sem PDF" }}</small>
+                    {% endif %}
+                    {% if p.tem_cessao %}
+                    <a class="btn secundario" href="{{ url_for('solicitacao_cessao_pdf', solicitacao_id=p.solicitacao_id) }}" target="_blank"
+                       title="{{ p.nome_arquivo_cessao }}" style="background:#856404;">Ver cessão</a>
                     {% endif %}
                 </td>
                 <td>

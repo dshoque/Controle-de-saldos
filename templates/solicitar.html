@@ -3,18 +3,20 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Solicitação de pedido · {{ centro.nome }}</title>
+<title>Solicitação de pedido · {{ centro.nome }} · Pregão {{ pregao_label }}</title>
 <style>
     :root {
         --azul: #003580; --azul-claro: #e8f0fb; --verde: #1e7e34; --verde-bg: #d4edda;
-        --vermelho: #a71d2a; --vermelho-bg: #f8d7da; --cinza: #6c757d; --cinza-bg: #e9ecef; --borda: #dee2e6;
+        --vermelho: #a71d2a; --vermelho-bg: #f8d7da; --amarelo: #856404; --amarelo-bg: #fff3cd;
+        --cinza: #6c757d; --cinza-bg: #e9ecef; --borda: #dee2e6;
     }
     * { box-sizing: border-box; }
     body { font-family: 'Segoe UI', Arial, sans-serif; margin: 0; background: #f4f6f9; color: #222; }
     header { background: var(--azul); color: #fff; padding: 16px 24px; }
     header h1 { font-size: 18px; margin: 0; }
     header p { margin: 4px 0 0; font-size: 13px; opacity: .9; }
-    main { padding: 22px 28px; max-width: 1100px; margin: 0 auto; }
+    header a { color: #fff; opacity: .85; font-size: 13px; }
+    main { padding: 22px 28px; max-width: 1200px; margin: 0 auto; }
     .card { background: #fff; border: 1px solid var(--borda); border-radius: 8px; padding: 18px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,.05); }
     table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
     th, td { padding: 8px 10px; border-bottom: 1px solid var(--borda); text-align: left; }
@@ -27,18 +29,21 @@
     .badge { padding: 3px 9px; border-radius: 12px; font-size: 12px; font-weight: 600; white-space: nowrap; }
     .badge-ok { background: var(--verde-bg); color: var(--verde); }
     .badge-erro { background: var(--vermelho-bg); color: var(--vermelho); }
+    .badge-aviso { background: var(--amarelo-bg); color: var(--amarelo); }
     .badge-neutro { background: var(--cinza-bg); color: var(--cinza); }
     .flash { padding: 10px 14px; border-radius: 6px; margin-bottom: 14px; font-size: 14px; }
     .flash-sucesso { background: var(--verde-bg); color: var(--verde); }
     .flash-erro { background: var(--vermelho-bg); color: var(--vermelho); }
     small.ajuda { color: var(--cinza); display: block; margin-top: 4px; }
     .toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
+    #bloco-cessao { display: none; border-color: var(--amarelo); }
 </style>
 </head>
 <body>
 <header>
-    <h1>Solicitação de pedido — {{ centro.nome }}</h1>
-    <p>Informe abaixo a quantidade desejada de cada item. O saldo é verificado na hora — não é possível enviar acima do disponível.</p>
+    <a href="{{ url_for('solicitar_lista', token=token) }}">&larr; Outros pregões</a>
+    <h1>Solicitação de pedido — {{ centro.nome }} — Pregão {{ pregao_label }}</h1>
+    <p>Informe a quantidade desejada de cada item. O saldo do seu centro é verificado na hora; se precisar pedir acima do que foi planejado para vocês, é necessário anexar o documento de cessão.</p>
 </header>
 <main>
     {% with mensagens = get_flashed_messages(with_categories=true) %}
@@ -49,10 +54,10 @@
 
     {% if not itens %}
     <div class="card">
-        <p>Não há itens disponíveis para pedido no momento para {{ centro.nome }} — ou ainda não há planejamento lançado, ou nenhum pregão está liberado/dentro do prazo. Fale com a DIARP.</p>
+        <p>Não há itens disponíveis para pedido neste pregão para {{ centro.nome }} no momento.</p>
     </div>
     {% else %}
-    <form method="post" enctype="multipart/form-data">
+    <form method="post" enctype="multipart/form-data" id="form-solicitacao">
         <div class="card">
             <div class="toolbar">
                 <input type="text" id="busca" placeholder="Buscar item por descrição, ata ou número..." style="min-width:320px" oninput="filtrarLinhas()">
@@ -61,7 +66,8 @@
                 <thead>
                     <tr>
                         <th>Ata</th><th>Item</th><th>Descrição</th>
-                        <th class="num">Saldo disponível</th><th class="num">Quantidade desejada</th>
+                        <th class="num">Saldo do seu centro</th><th class="num">Saldo total do item</th>
+                        <th class="num">Quantidade desejada</th>
                         <th class="num">Saldo resultante</th><th>Situação</th>
                     </tr>
                 </thead>
@@ -72,11 +78,12 @@
                         <td>{{ it.numero_ata }}</td>
                         <td>{{ it.numero_item }}</td>
                         <td>{{ it.descricao or "—" }}</td>
-                        <td class="num" id="saldo-{{ campo }}">{{ "%.2f"|format(it.saldo) }}</td>
+                        <td class="num">{{ "%.2f"|format(it.saldo) }}</td>
+                        <td class="num">{{ "%.2f"|format(it.saldo_item_total) }}</td>
                         <td class="num">
                             <input type="number" min="0" step="any" name="{{ campo }}" id="{{ campo }}"
                                    value="" placeholder="0"
-                                   oninput="recalcular('{{ campo }}', {{ it.saldo }})">
+                                   oninput="recalcular('{{ campo }}', {{ it.saldo }}, {{ it.saldo_item_total }})">
                         </td>
                         <td class="num" id="restante-{{ campo }}">{{ "%.2f"|format(it.saldo) }}</td>
                         <td id="status-{{ campo }}"><span class="badge badge-neutro">—</span></td>
@@ -87,10 +94,20 @@
         </div>
 
         <div class="card">
-            <label>Anexar o pedido assinado (PDF) — obrigatório para o processo administrativo</label><br>
+            <label>Anexar o pedido assinado (PDF) — obrigatório, máx. 10 MB</label><br>
             <input type="file" name="pdf" accept=".pdf" required><br><br>
             <label>Observação (opcional)</label><br>
-            <textarea name="observacao" rows="2" style="width:100%; max-width:500px;"></textarea><br><br>
+            <textarea name="observacao" rows="2" style="width:100%; max-width:500px;"></textarea>
+        </div>
+
+        <div class="card" id="bloco-cessao">
+            <strong style="color: var(--amarelo);">Pedido acima do planejado para o seu centro</strong>
+            <p><small class="ajuda">Pelo menos um item está pedindo mais do que foi planejado para {{ centro.nome }} — ainda cabe no total do item na ata, mas isso exige o documento de cessão de outro centro de custo. Anexe abaixo.</small></p>
+            <label>Documento de cessão (PDF) — máx. 10 MB</label><br>
+            <input type="file" name="cessao" accept=".pdf">
+        </div>
+
+        <div class="card">
             <button type="submit">Enviar solicitação</button>
         </div>
     </form>
@@ -105,10 +122,16 @@
         });
     }
 
-    function recalcular(campo, saldoDisponivel) {
+    function algumAcimaDoCentro() {
+        let algum = false;
+        document.querySelectorAll('#tabela-itens tbody tr [data-acima-centro="1"]').forEach(function () { algum = true; });
+        return algum;
+    }
+
+    function recalcular(campo, saldoCentro, saldoItemTotal) {
         const input = document.getElementById(campo);
         const qtd = parseFloat(input.value.replace(',', '.')) || 0;
-        const restante = saldoDisponivel - qtd;
+        const restante = saldoCentro - qtd;
         const celulaRestante = document.getElementById('restante-' + campo);
         const celulaStatus = document.getElementById('status-' + campo);
         celulaRestante.textContent = restante.toFixed(2);
@@ -116,13 +139,23 @@
         if (qtd <= 0) {
             celulaStatus.innerHTML = '<span class="badge badge-neutro">—</span>';
             celulaRestante.style.color = '';
-        } else if (restante < -0.0001) {
-            celulaStatus.innerHTML = '<span class="badge badge-erro">Excede o saldo</span>';
+            input.removeAttribute('data-acima-centro');
+        } else if (qtd - saldoItemTotal > 0.0001) {
+            celulaStatus.innerHTML = '<span class="badge badge-erro">Excede o total do item na ata</span>';
             celulaRestante.style.color = '#a71d2a';
+            input.removeAttribute('data-acima-centro');
+        } else if (qtd - saldoCentro > 0.0001) {
+            celulaStatus.innerHTML = '<span class="badge badge-aviso">Acima do planejado — precisa de cessão</span>';
+            celulaRestante.style.color = '#856404';
+            input.setAttribute('data-acima-centro', '1');
         } else {
             celulaStatus.innerHTML = '<span class="badge badge-ok">OK</span>';
             celulaRestante.style.color = '';
+            input.removeAttribute('data-acima-centro');
         }
+
+        const blocoCessao = document.getElementById('bloco-cessao');
+        blocoCessao.style.display = algumAcimaDoCentro() ? 'block' : 'none';
     }
 </script>
 </body>

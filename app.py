@@ -17,7 +17,7 @@ UASG_PADRAO = "153010"
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY") or "chave-dev-local-nao-usar-em-producao"
-app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024  # 10MB: cobre PDFs assinados e planilhas de pedido
+app.config["MAX_CONTENT_LENGTH"] = 21 * 1024 * 1024  # cobre até 2 anexos de 10MB (pedido + cessão) + folga do multipart
 
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
 
@@ -67,13 +67,20 @@ def calcular_saldos(conn, uasg=UASG_PADRAO):
             i.unidade,
             i.quantidade_homologada,
             a.numero_controle_pncp_compra,
+            a.numero_compra AS pregao_numero_compra,
+            a.ano_compra AS pregao_ano_compra,
             COALESCE(pc.liberado, FALSE) AS pregao_liberado,
             pc.prazo_final AS pregao_prazo_final,
             COALESCE((
                 SELECT SUM(pe.quantidade_solicitada) FROM pedidos pe
                 WHERE pe.numero_ata = p.numero_ata AND pe.uasg = p.uasg AND pe.numero_item = p.numero_item
                       AND pe.centro_custo = p.centro_custo AND pe.status IN ('Solicitado', 'Empenhado')
-            ), 0) AS usado
+            ), 0) AS usado,
+            COALESCE((
+                SELECT SUM(pe.quantidade_solicitada) FROM pedidos pe
+                WHERE pe.numero_ata = p.numero_ata AND pe.uasg = p.uasg AND pe.numero_item = p.numero_item
+                      AND pe.status IN ('Solicitado', 'Empenhado')
+            ), 0) AS usado_total_item
         FROM planejamento p
         LEFT JOIN itens i ON i.numero_ata = p.numero_ata AND i.uasg = p.uasg AND i.numero_item = p.numero_item
         LEFT JOIN arps a ON a.numero_ata = p.numero_ata AND a.uasg = p.uasg
@@ -87,6 +94,7 @@ def calcular_saldos(conn, uasg=UASG_PADRAO):
     for linha in linhas:
         d = dict(linha)
         d["saldo"] = d["quantidade_planejada"] - d["usado"]
+        d["saldo_item_total"] = (d["quantidade_homologada"] or 0) - d["usado_total_item"]
         resultado.append(d)
     return resultado
 
@@ -553,22 +561,59 @@ def novo_pedido_confirmar():
 
 # ---------------------------------------------------------- solicitar (link do centro de custo) --
 
+MAX_TAMANHO_ARQUIVO = 10 * 1024 * 1024  # 10MB por arquivo (não por request — ver MAX_CONTENT_LENGTH acima)
+
+
 @app.route("/solicitar/<token>", methods=["GET"])
-def solicitar_form(token):
+def solicitar_lista(token):
+    conn = db.get_conn()
+    try:
+        centro = conn.execute("SELECT codigo, nome FROM centros_custo WHERE token=%s", (token,)).fetchone()
+        if not centro:
+            abort(404)
+        itens = [s for s in calcular_saldos(conn) if s["centro_custo"] == centro["codigo"] and pregao_aberto(s)]
+
+        pregoes_map = {}
+        for it in itens:
+            pid = it["numero_controle_pncp_compra"]
+            if not pid:
+                continue
+            info = pregoes_map.setdefault(pid, {
+                "pregao_id": pid,
+                "numero_compra": it["pregao_numero_compra"],
+                "ano_compra": it["pregao_ano_compra"],
+                "prazo_final": it["pregao_prazo_final"],
+                "qtd_itens": 0,
+            })
+            info["qtd_itens"] += 1
+        pregoes = sorted(pregoes_map.values(), key=lambda p: p["prazo_final"] or "9999-99-99")
+
+        return render_template("solicitar_lista.html", centro=centro, pregoes=pregoes, token=token)
+    finally:
+        conn.close()
+
+
+@app.route("/solicitar/<token>/<path:pregao_id>", methods=["GET"])
+def solicitar_form(token, pregao_id):
     conn = db.get_conn()
     try:
         centro = conn.execute("SELECT codigo, nome FROM centros_custo WHERE token=%s", (token,)).fetchone()
         if not centro:
             abort(404)
         itens = [s for s in calcular_saldos(conn)
-                 if s["centro_custo"] == centro["codigo"] and pregao_aberto(s)]
-        return render_template("solicitar.html", centro=centro, itens=itens, token=token)
+                 if s["centro_custo"] == centro["codigo"] and pregao_aberto(s)
+                    and s["numero_controle_pncp_compra"] == pregao_id]
+        if not itens:
+            abort(404)
+        pregao_label = f'{itens[0]["pregao_numero_compra"]}/{itens[0]["pregao_ano_compra"]}'
+        return render_template("solicitar.html", centro=centro, itens=itens, token=token,
+                                pregao_id=pregao_id, pregao_label=pregao_label)
     finally:
         conn.close()
 
 
-@app.route("/solicitar/<token>", methods=["POST"])
-def solicitar_confirmar(token):
+@app.route("/solicitar/<token>/<path:pregao_id>", methods=["POST"])
+def solicitar_confirmar(token, pregao_id):
     conn = db.get_conn()
     try:
         centro = conn.execute("SELECT codigo, nome FROM centros_custo WHERE token=%s", (token,)).fetchone()
@@ -578,25 +623,44 @@ def solicitar_confirmar(token):
         pdf = request.files.get("pdf")
         if not pdf or pdf.filename == "":
             flash("Anexe o pedido assinado em PDF antes de enviar.", "erro")
-            return redirect(url_for("solicitar_form", token=token))
+            return redirect(url_for("solicitar_form", token=token, pregao_id=pregao_id))
         if not pdf.filename.lower().endswith(".pdf"):
-            flash("O anexo precisa ser um arquivo .pdf.", "erro")
-            return redirect(url_for("solicitar_form", token=token))
+            flash("O anexo do pedido precisa ser um arquivo .pdf.", "erro")
+            return redirect(url_for("solicitar_form", token=token, pregao_id=pregao_id))
+        conteudo_pdf = pdf.read()
+        if len(conteudo_pdf) > MAX_TAMANHO_ARQUIVO:
+            flash(f"O PDF do pedido tem {len(conteudo_pdf) / 1024 / 1024:.1f} MB — o limite é 10 MB por arquivo.", "erro")
+            return redirect(url_for("solicitar_form", token=token, pregao_id=pregao_id))
+
+        cessao = request.files.get("cessao")
+        nome_cessao, conteudo_cessao = None, None
+        if cessao and cessao.filename:
+            if not cessao.filename.lower().endswith(".pdf"):
+                flash("O anexo de cessão precisa ser um arquivo .pdf.", "erro")
+                return redirect(url_for("solicitar_form", token=token, pregao_id=pregao_id))
+            conteudo_cessao = cessao.read()
+            if len(conteudo_cessao) > MAX_TAMANHO_ARQUIVO:
+                flash(f"O PDF de cessão tem {len(conteudo_cessao) / 1024 / 1024:.1f} MB — o limite é 10 MB por arquivo.", "erro")
+                return redirect(url_for("solicitar_form", token=token, pregao_id=pregao_id))
+            nome_cessao = cessao.filename
 
         saldos_centro = [s for s in calcular_saldos(conn)
-                          if s["centro_custo"] == centro["codigo"] and pregao_aberto(s)]
+                          if s["centro_custo"] == centro["codigo"] and pregao_aberto(s)
+                             and s["numero_controle_pncp_compra"] == pregao_id]
 
-        # Reenvio: o que já está "Solicitado" para este item vai ser substituído (não somado),
-        # então devolve essa quantidade ao saldo disponível antes de validar o novo valor.
-        pendentes = conn.execute("""
+        # Reenvio: o que já está "Solicitado" deste centro pra este item vai ser substituído
+        # (não somado), então devolve essa quantidade — tanto ao saldo do centro quanto ao saldo
+        # total do item na ata — antes de validar o novo valor.
+        pendentes_centro = conn.execute("""
             SELECT numero_ata, numero_item, SUM(quantidade_solicitada) AS total
             FROM pedidos WHERE uasg=%s AND centro_custo=%s AND status='Solicitado'
             GROUP BY numero_ata, numero_item
         """, (UASG_PADRAO, centro["codigo"])).fetchall()
-        pendentes_map = {(p["numero_ata"], p["numero_item"]): p["total"] for p in pendentes}
+        pendentes_centro_map = {(p["numero_ata"], p["numero_item"]): p["total"] for p in pendentes_centro}
 
         pedidos_a_criar = []
         erros = []
+        precisa_cessao = False
         for saldo in saldos_centro:
             campo = id_campo_quantidade(saldo["numero_ata"], saldo["numero_item"])
             valor = request.form.get(campo, "").strip().replace(",", ".")
@@ -609,30 +673,44 @@ def solicitar_confirmar(token):
                 continue
             if quantidade <= 0:
                 continue
-            saldo_efetivo = saldo["saldo"] + pendentes_map.get((saldo["numero_ata"], saldo["numero_item"]), 0)
-            if quantidade - saldo_efetivo > 1e-6:
+
+            pendente_proprio = pendentes_centro_map.get((saldo["numero_ata"], saldo["numero_item"]), 0)
+            saldo_centro_efetivo = saldo["saldo"] + pendente_proprio
+            saldo_item_efetivo = saldo["saldo_item_total"] + pendente_proprio
+
+            if quantidade - saldo_item_efetivo > 1e-6:
                 erros.append(
                     f"Item {saldo['numero_item']} (ata {saldo['numero_ata']}): pedido de {quantidade:.2f} "
-                    f"excede o saldo disponível de {saldo_efetivo:.2f}."
+                    f"excede o saldo total do item na ata ({saldo_item_efetivo:.2f}), mesmo com cessão."
                 )
                 continue
+            if quantidade - saldo_centro_efetivo > 1e-6:
+                precisa_cessao = True
+
             pedidos_a_criar.append((saldo["numero_ata"], saldo["numero_item"], quantidade))
 
         if erros:
             for e in erros:
                 flash(e, "erro")
-            return redirect(url_for("solicitar_form", token=token))
+            return redirect(url_for("solicitar_form", token=token, pregao_id=pregao_id))
 
         if not pedidos_a_criar:
             flash("Informe ao menos uma quantidade para enviar o pedido.", "erro")
-            return redirect(url_for("solicitar_form", token=token))
+            return redirect(url_for("solicitar_form", token=token, pregao_id=pregao_id))
 
-        conteudo_pdf = pdf.read()
+        if precisa_cessao and not conteudo_cessao:
+            flash("Pelo menos um item está acima do que este centro de custo planejou — "
+                  "anexe o documento de cessão para enviar.", "erro")
+            return redirect(url_for("solicitar_form", token=token, pregao_id=pregao_id))
+
         ts = db.agora()
         solicitacao = conn.execute("""
-            INSERT INTO solicitacoes (centro_custo, data_solicitacao, nome_arquivo_pdf, conteudo_pdf, observacao, criado_em)
-            VALUES (%s, %s, %s, %s, %s, %s) RETURNING id
+            INSERT INTO solicitacoes (centro_custo, data_solicitacao, nome_arquivo_pdf, conteudo_pdf,
+                                       nome_arquivo_cessao, conteudo_cessao_pdf,
+                                       numero_controle_pncp_compra, observacao, criado_em)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
         """, (centro["codigo"], date.today().isoformat(), pdf.filename, conteudo_pdf,
+              nome_cessao, conteudo_cessao, pregao_id,
               request.form.get("observacao", "").strip(), ts)).fetchone()
         solicitacao_id = solicitacao["id"]
 
@@ -652,8 +730,11 @@ def solicitar_confirmar(token):
                   centro["codigo"], quantidade, ts, ts))
         conn.commit()
 
-        flash(f"Pedido enviado com sucesso: {len(pedidos_a_criar)} item(ns) registrado(s).", "sucesso")
-        return redirect(url_for("solicitar_form", token=token))
+        msg = f"Pedido enviado com sucesso: {len(pedidos_a_criar)} item(ns) registrado(s)."
+        if precisa_cessao:
+            msg += " Documento de cessão anexado."
+        flash(msg, "sucesso")
+        return redirect(url_for("solicitar_form", token=token, pregao_id=pregao_id))
     finally:
         conn.close()
 
@@ -668,7 +749,8 @@ def pedidos():
         filtro_status = request.args.get("status", "").strip()
         query = """
             SELECT pe.*, i.descricao,
-                   s.nome_arquivo_pdf, (s.conteudo_pdf IS NOT NULL) AS tem_pdf
+                   s.nome_arquivo_pdf, (s.conteudo_pdf IS NOT NULL) AS tem_pdf,
+                   s.nome_arquivo_cessao, (s.conteudo_cessao_pdf IS NOT NULL) AS tem_cessao
             FROM pedidos pe
             LEFT JOIN itens i ON i.numero_ata = pe.numero_ata AND i.uasg = pe.uasg AND i.numero_item = pe.numero_item
             LEFT JOIN solicitacoes s ON s.id = pe.solicitacao_id
@@ -716,6 +798,23 @@ def solicitacao_pdf(solicitacao_id):
         conteudo = bytes(row["conteudo_pdf"])
         return send_file(io.BytesIO(conteudo), as_attachment=True,
                           download_name=row["nome_arquivo_pdf"] or f"solicitacao_{solicitacao_id}.pdf",
+                          mimetype="application/pdf")
+    finally:
+        conn.close()
+
+
+@app.route("/solicitacoes/<int:solicitacao_id>/cessao")
+@requer_login
+def solicitacao_cessao_pdf(solicitacao_id):
+    conn = db.get_conn()
+    try:
+        row = conn.execute("SELECT nome_arquivo_cessao, conteudo_cessao_pdf FROM solicitacoes WHERE id=%s",
+                            (solicitacao_id,)).fetchone()
+        if not row or not row["conteudo_cessao_pdf"]:
+            abort(404)
+        conteudo = bytes(row["conteudo_cessao_pdf"])
+        return send_file(io.BytesIO(conteudo), as_attachment=True,
+                          download_name=row["nome_arquivo_cessao"] or f"cessao_{solicitacao_id}.pdf",
                           mimetype="application/pdf")
     finally:
         conn.close()
@@ -802,7 +901,7 @@ SQL_PDFS_ELEGIVEIS = """
     JOIN pedidos pe ON pe.solicitacao_id = s.id
     JOIN arps a ON a.numero_ata = pe.numero_ata AND a.uasg = pe.uasg
     LEFT JOIN pregoes_controle pc ON pc.numero_controle_pncp_compra = a.numero_controle_pncp_compra AND pc.uasg = a.uasg
-    WHERE s.conteudo_pdf IS NOT NULL
+    WHERE s.conteudo_pdf IS NOT NULL OR s.conteudo_cessao_pdf IS NOT NULL
     GROUP BY s.id, s.centro_custo, s.nome_arquivo_pdf, s.data_solicitacao
     HAVING MAX(pc.prazo_final) IS NOT NULL AND MAX(pc.prazo_final)::date <= (CURRENT_DATE - INTERVAL '1 month')
 """
@@ -846,7 +945,7 @@ def manutencao_expurgar_pdfs():
     try:
         ids = [r["id"] for r in conn.execute(SQL_PDFS_ELEGIVEIS).fetchall()]
         if ids:
-            conn.execute("UPDATE solicitacoes SET conteudo_pdf = NULL WHERE id = ANY(%s)", (ids,))
+            conn.execute("UPDATE solicitacoes SET conteudo_pdf = NULL, conteudo_cessao_pdf = NULL WHERE id = ANY(%s)", (ids,))
             conn.commit()
         flash(f"{len(ids)} PDF(s) expurgado(s) (mais de 1 mês após o prazo do pregão).", "sucesso")
     finally:

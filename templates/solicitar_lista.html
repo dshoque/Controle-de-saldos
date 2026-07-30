@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pedidos · {{ centro.nome }}</title>
+<style>
+    :root {
+        --azul: #003580; --azul-claro: #e8f0fb; --cinza: #6c757d; --cinza-bg: #e9ecef; --borda: #dee2e6;
+    }
+    * { box-sizing: border-box; }
+    body { font-family: 'Segoe UI', Arial, sans-serif; margin: 0; background: #f4f6f9; color: #222; }
+    header { background: var(--azul); color: #fff; padding: 16px 24px; }
+    header h1 { font-size: 18px; margin: 0; }
+    header p { margin: 4px 0 0; font-size: 13px; opacity: .9; }
+    main { padding: 22px 28px; max-width: 900px; margin: 0 auto; }
+    .card { background: #fff; border: 1px solid var(--borda); border-radius: 8px; padding: 18px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,.05); }
+    table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+    th, td { padding: 10px; border-bottom: 1px solid var(--borda); text-align: left; }
+    th { background: var(--azul-claro); color: var(--azul); font-weight: 600; }
+    .num { text-align: right; font-variant-numeric: tabular-nums; }
+    .btn { background: var(--azul); color: #fff; border: none; padding: 8px 16px; border-radius: 5px; cursor: pointer; font-size: 13.5px; text-decoration: none; display: inline-block; }
+    small.ajuda { color: var(--cinza); }
+</style>
+</head>
+<body>
+<header>
+    <h1>Solicitação de pedido — {{ centro.nome }}</h1>
+    <p>Escolha o pregão para o qual você quer fazer um pedido.</p>
+</header>
+<main>
+    <div class="card">
+        {% if not pregoes %}
+        <p>Nenhum pregão está liberado para pedido no momento para {{ centro.nome }}. Fale com a DIARP.</p>
+        {% else %}
+        <table>
+            <thead><tr><th>Pregão</th><th class="num">Itens disponíveis</th><th>Prazo</th><th></th></tr></thead>
+            <tbody>
+            {% for p in pregoes %}
+                <tr>
+                    <td>{{ p.numero_compra }}/{{ p.ano_compra }}</td>
+                    <td class="num">{{ p.qtd_itens }}</td>
+                    <td>{{ p.prazo_final or "sem prazo definido" }}</td>
+                    <td><a class="btn" href="{{ url_for('solicitar_form', token=token, pregao_id=p.pregao_id) }}">Fazer pedido</a></td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+    </div>
+</main>
+</body>
+</html>
