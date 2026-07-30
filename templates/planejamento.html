@@ -78,7 +78,7 @@
                     <td>{{ c.codigo }}</td><td>{{ c.nome }}</td>
                     <td>
                         {% if c.token %}
-                        <input type="text" readonly value="{{ url_for('solicitar_form', token=c.token, _external=True) }}"
+                        <input type="text" readonly value="{{ url_for('solicitar_lista', token=c.token, _external=True) }}"
                                style="width:100%; font-size:12px;" onclick="this.select();">
                         {% else %}
                         <small class="ajuda">sem link ainda</small>
