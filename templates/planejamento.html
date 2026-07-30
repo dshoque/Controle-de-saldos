@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block title %}Planejamento{% endblock %}
+{% block content %}
+
+{% if alerta_itens %}
+<div class="card" style="border-color: var(--vermelho);">
+    <strong style="color: var(--vermelho);">⚠ Itens com planejamento acima do total homologado na ata:</strong>
+    <table>
+        <thead><tr><th>Ata</th><th>Item</th><th>Descrição</th><th class="num">Homologado</th><th class="num">Somado no planejamento</th></tr></thead>
+        <tbody>
+        {% for a in alerta_itens %}
+            <tr>
+                <td>{{ a.numero_ata }}</td><td>{{ a.numero_item }}</td><td>{{ a.descricao }}</td>
+                <td class="num">{{ "%.2f"|format(a.quantidade_homologada or 0) }}</td>
+                <td class="num" style="color: var(--vermelho); font-weight:600;">{{ "%.2f"|format(a.total_planejado) }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+<div class="grid grid-2">
+    <div class="card">
+        <h3>Novo lançamento de planejamento</h3>
+        <p><small class="ajuda">Preenchido uma única vez por item × centro de custo, na adjudicação da ata. A soma de todos os centros de custo para um item deve bater com o quantitativo homologado.</small></p>
+        <form method="post" action="{{ url_for('planejamento_novo') }}" class="grid" style="gap:10px;">
+            <div>
+                <label>Item da ata</label><br>
+                <select name="item_selecionado" onchange="const [a,i]=this.value.split('|'); document.getElementsByName('numero_ata')[0].value=a; document.getElementsByName('numero_item')[0].value=i;" style="width:100%">
+                    <option value="">— selecione um item sincronizado —</option>
+                    {% for it in itens %}
+                    <option value="{{ it.numero_ata }}|{{ it.numero_item }}">{{ it.numero_ata }} · item {{ it.numero_item }} · {{ (it.descricao or "")[:60] }} (homolog.: {{ "%.2f"|format(it.quantidade_homologada or 0) }})</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="grid grid-2">
+                <div><label>Número da ata</label><br><input type="text" name="numero_ata" placeholder="00042/2025" required style="width:100%"></div>
+                <div><label>Número do item</label><br><input type="text" name="numero_item" placeholder="00001" required style="width:100%"></div>
+            </div>
+            <div class="grid grid-2">
+                <div>
+                    <label>Centro de custo</label><br>
+                    <input type="text" name="centro_custo" list="lista-centros" required style="width:100%">
+                    <datalist id="lista-centros">
+                        {% for c in centros %}<option value="{{ c.codigo }}">{{ c.nome }}</option>{% endfor %}
+                    </datalist>
+                </div>
+                <div><label>Quantidade planejada</label><br><input type="text" name="quantidade_planejada" required style="width:100%"></div>
+            </div>
+            <button type="submit">Salvar planejamento</button>
+        </form>
+    </div>
+
+    <div class="card">
+        <h3>Centros de custo</h3>
+        <p><small class="ajuda">Cadastre as diretorias/campi que participam do planejamento.</small></p>
+        <form method="post" action="{{ url_for('centro_custo_novo') }}" class="toolbar">
+            <input type="text" name="codigo" placeholder="Código (ex: CAMPUS-MAR)" required>
+            <input type="text" name="nome" placeholder="Nome" required style="min-width:220px">
+            <button type="submit" class="secundario">Adicionar</button>
+        </form>
+        <table>
+            <thead><tr><th>Código</th><th>Nome</th><th>Link de solicitação</th><th></th></tr></thead>
+            <tbody>
+            {% for c in centros %}
+                <tr>
+                    <td>{{ c.codigo }}</td><td>{{ c.nome }}</td>
+                    <td>
+                        {% if c.token %}
+                        <input type="text" readonly value="{{ url_for('solicitar_form', token=c.token, _external=True) }}"
+                               style="width:100%; font-size:12px;" onclick="this.select();">
+                        {% else %}
+                        <small class="ajuda">sem link ainda</small>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <form method="post" action="{{ url_for('centro_custo_regenerar_token', codigo=c.codigo) }}" class="inline"
+                              onsubmit="return confirm('Gerar um novo link para {{ c.codigo }}? O link atual deixará de funcionar.');">
+                            <button type="submit" class="secundario">Novo link</button>
+                        </form>
+                    </td>
+                </tr>
+            {% else %}
+                <tr><td colspan="4">Nenhum centro de custo cadastrado.</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        <p><small class="ajuda">Envie o link de cada linha ao respectivo centro de custo. Por ele, o solicitante lança as quantidades desejadas e anexa o pedido assinado em PDF, sem precisar de senha própria.</small></p>
+    </div>
+</div>
+
+<div class="card">
+    <h3>Planejamento lançado</h3>
+    <table>
+        <thead>
+            <tr><th>Ata</th><th>Item</th><th>Centro de custo</th><th class="num">Quantidade planejada</th><th>Atualizado em</th><th></th></tr>
+        </thead>
+        <tbody>
+        {% for p in planos %}
+            <tr>
+                <td>{{ p.numero_ata }}</td><td>{{ p.numero_item }}</td><td>{{ p.centro_custo }}</td>
+                <td class="num">{{ "%.2f"|format(p.quantidade_planejada) }}</td>
+                <td>{{ p.atualizado_em }}</td>
+                <td>
+                    <form method="post" action="{{ url_for('planejamento_excluir', plano_id=p.id) }}" class="inline" onsubmit="return confirm('Remover este planejamento?');">
+                        <button type="submit" class="perigo">Excluir</button>
+                    </form>
+                </td>
+            </tr>
+        {% else %}
+            <tr><td colspan="6">Nenhum planejamento lançado ainda.</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}
