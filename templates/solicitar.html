@@ -42,6 +42,8 @@
 <body>
 <header>
     <a href="{{ url_for('solicitar_lista', token=token) }}">&larr; Outros pregões</a>
+    &nbsp;·&nbsp;
+    <a href="{{ url_for('meus_pedidos', token=token) }}">Meus pedidos</a>
     <h1>Solicitação de pedido — {{ centro.nome }} — Pregão {{ pregao_label }}</h1>
     <p>Informe a quantidade desejada de cada item. O saldo do seu centro é verificado na hora; se precisar pedir acima do que foi planejado para vocês, é necessário anexar o documento de cessão.</p>
 </header>

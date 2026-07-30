@@ -107,6 +107,15 @@ CREATE TABLE IF NOT EXISTS pedidos (
     criado_em TEXT,
     atualizado_em TEXT
 );
+
+CREATE TABLE IF NOT EXISTS pedidos_ajustes (
+    id SERIAL PRIMARY KEY,
+    pedido_id INTEGER NOT NULL REFERENCES pedidos(id),
+    quantidade_anterior DOUBLE PRECISION NOT NULL,
+    quantidade_nova DOUBLE PRECISION NOT NULL,
+    observacao TEXT NOT NULL,
+    criado_em TEXT
+);
 """
 
 

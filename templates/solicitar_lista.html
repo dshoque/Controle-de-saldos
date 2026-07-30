@@ -26,7 +26,7 @@
 <body>
 <header>
     <h1>Solicitação de pedido — {{ centro.nome }}</h1>
-    <p>Escolha o pregão para o qual você quer fazer um pedido.</p>
+    <p>Escolha o pregão para o qual você quer fazer um pedido. — <a href="{{ url_for('meus_pedidos', token=token) }}" style="color:#fff;">Ver meus pedidos</a></p>
 </header>
 <main>
     <div class="card">

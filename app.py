@@ -407,6 +407,61 @@ def planejamento_lote_grade(pregao_id):
         conn.close()
 
 
+# ------------------------------------------------------------- saldo por pregão (matriz, leitura) --
+
+@app.route("/saldo-pregao")
+@requer_login
+def saldo_pregao_lista():
+    conn = db.get_conn()
+    try:
+        pregoes = conn.execute("""
+            SELECT a.numero_controle_pncp_compra, a.numero_compra, a.ano_compra, COUNT(*) AS qtd_atas
+            FROM arps a
+            WHERE a.uasg = %s AND a.numero_controle_pncp_compra IS NOT NULL AND a.numero_controle_pncp_compra <> ''
+            GROUP BY a.numero_controle_pncp_compra, a.numero_compra, a.ano_compra
+            ORDER BY a.ano_compra DESC, a.numero_compra DESC
+        """, (UASG_PADRAO,)).fetchall()
+        return render_template("saldo_pregao_lista.html", pregoes=pregoes)
+    finally:
+        conn.close()
+
+
+@app.route("/saldo-pregao/<path:pregao_id>")
+@requer_login
+def saldo_pregao_grade(pregao_id):
+    conn = db.get_conn()
+    try:
+        pregao = conn.execute("""
+            SELECT numero_controle_pncp_compra, numero_compra, ano_compra
+            FROM arps WHERE uasg=%s AND numero_controle_pncp_compra=%s LIMIT 1
+        """, (UASG_PADRAO, pregao_id)).fetchone()
+        if not pregao:
+            abort(404)
+
+        centros = conn.execute(
+            "SELECT * FROM centros_custo ORDER BY ordem NULLS LAST, codigo"
+        ).fetchall()
+
+        linhas = [s for s in calcular_saldos(conn) if s["numero_controle_pncp_compra"] == pregao_id]
+
+        itens_map = {}
+        for linha in linhas:
+            chave = (linha["numero_ata"], linha["numero_item"])
+            info = itens_map.setdefault(chave, {
+                "numero_ata": linha["numero_ata"],
+                "numero_item": linha["numero_item"],
+                "descricao": linha["descricao"],
+                "quantidade_homologada": linha["quantidade_homologada"],
+                "saldos": {},
+            })
+            info["saldos"][linha["centro_custo"]] = linha["saldo"]
+        itens = sorted(itens_map.values(), key=lambda i: (i["numero_ata"], i["numero_item"]))
+
+        return render_template("saldo_pregao_grade.html", pregao=pregao, centros=centros, itens=itens)
+    finally:
+        conn.close()
+
+
 # ------------------------------------------------------------ novo pedido --
 # Ferramenta interna da DIARP para lançamento em lote via planilha (sem PDF).
 # O fluxo principal para os centros de custo é /solicitar/<token>, mais abaixo.
@@ -593,6 +648,37 @@ def solicitar_lista(token):
         conn.close()
 
 
+@app.route("/solicitar/<token>/meus-pedidos")
+def meus_pedidos(token):
+    conn = db.get_conn()
+    try:
+        centro = conn.execute("SELECT codigo, nome FROM centros_custo WHERE token=%s", (token,)).fetchone()
+        if not centro:
+            abort(404)
+
+        lista = conn.execute("""
+            SELECT pe.*, i.descricao
+            FROM pedidos pe
+            LEFT JOIN itens i ON i.numero_ata = pe.numero_ata AND i.uasg = pe.uasg AND i.numero_item = pe.numero_item
+            WHERE pe.uasg = %s AND pe.centro_custo = %s
+            ORDER BY pe.data_pedido DESC, pe.id DESC
+        """, (UASG_PADRAO, centro["codigo"])).fetchall()
+
+        ajustes_map = {}
+        pedido_ids = [p["id"] for p in lista]
+        if pedido_ids:
+            ajustes = conn.execute("""
+                SELECT pedido_id, quantidade_anterior, quantidade_nova, observacao, criado_em
+                FROM pedidos_ajustes WHERE pedido_id = ANY(%s) ORDER BY criado_em
+            """, (pedido_ids,)).fetchall()
+            for a in ajustes:
+                ajustes_map.setdefault(a["pedido_id"], []).append(a)
+
+        return render_template("meus_pedidos.html", centro=centro, pedidos=lista, ajustes_map=ajustes_map, token=token)
+    finally:
+        conn.close()
+
+
 @app.route("/solicitar/<token>/<path:pregao_id>", methods=["GET"])
 def solicitar_form(token, pregao_id):
     conn = db.get_conn()
@@ -762,8 +848,19 @@ def pedidos():
             params.append(filtro_status)
         query += " ORDER BY pe.data_pedido DESC, pe.id DESC"
         lista = conn.execute(query, params).fetchall()
+
+        ajustes_map = {}
+        pedido_ids = [p["id"] for p in lista]
+        if pedido_ids:
+            ajustes = conn.execute("""
+                SELECT pedido_id, quantidade_anterior, quantidade_nova, observacao, criado_em
+                FROM pedidos_ajustes WHERE pedido_id = ANY(%s) ORDER BY criado_em
+            """, (pedido_ids,)).fetchall()
+            for a in ajustes:
+                ajustes_map.setdefault(a["pedido_id"], []).append(a)
+
         return render_template("pedidos.html", pedidos=lista, status_validos=db.STATUS_VALIDOS,
-                                filtro_status=filtro_status)
+                                filtro_status=filtro_status, ajustes_map=ajustes_map)
     finally:
         conn.close()
 
@@ -781,6 +878,41 @@ def pedido_status(pedido_id):
                      (novo_status, db.agora(), pedido_id))
         conn.commit()
         flash(f"Pedido #{pedido_id} atualizado para '{novo_status}'.", "sucesso")
+    finally:
+        conn.close()
+    return redirect(request.referrer or url_for("pedidos"))
+
+
+@app.route("/pedidos/<int:pedido_id>/editar", methods=["POST"])
+@requer_login
+def pedido_editar(pedido_id):
+    observacao = request.form.get("observacao", "").strip()
+    valor = request.form.get("quantidade_nova", "").strip().replace(",", ".")
+    if not observacao:
+        flash("Informe o motivo da correção (ex.: divergência com o PDF anexado).", "erro")
+        return redirect(request.referrer or url_for("pedidos"))
+    try:
+        quantidade_nova = float(valor)
+        if quantidade_nova <= 0:
+            raise ValueError
+    except ValueError:
+        flash("Quantidade nova inválida.", "erro")
+        return redirect(request.referrer or url_for("pedidos"))
+
+    conn = db.get_conn()
+    try:
+        pedido = conn.execute("SELECT quantidade_solicitada FROM pedidos WHERE id=%s", (pedido_id,)).fetchone()
+        if not pedido:
+            abort(404)
+        ts = db.agora()
+        conn.execute("""
+            INSERT INTO pedidos_ajustes (pedido_id, quantidade_anterior, quantidade_nova, observacao, criado_em)
+            VALUES (%s, %s, %s, %s, %s)
+        """, (pedido_id, pedido["quantidade_solicitada"], quantidade_nova, observacao, ts))
+        conn.execute("UPDATE pedidos SET quantidade_solicitada=%s, atualizado_em=%s WHERE id=%s",
+                     (quantidade_nova, ts, pedido_id))
+        conn.commit()
+        flash(f"Pedido #{pedido_id} corrigido: {pedido['quantidade_solicitada']:.2f} → {quantidade_nova:.2f}.", "sucesso")
     finally:
         conn.close()
     return redirect(request.referrer or url_for("pedidos"))

@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Saldo — Pregão {{ pregao.numero_compra }}/{{ pregao.ano_compra }}{% endblock %}
+{% block content %}
+
+<div class="card">
+    <div class="toolbar" style="justify-content: space-between;">
+        <div>
+            <strong>Pregão {{ pregao.numero_compra }}/{{ pregao.ano_compra }}</strong>
+            — {{ itens|length }} item(ns)
+        </div>
+        <a href="{{ url_for('saldo_pregao_lista') }}" class="btn secundario">Voltar</a>
+    </div>
+    <p><small class="ajuda">Saldo disponível (planejado − solicitado/empenhado) de cada item, por centro de custo. Somente leitura — para lançar planejamento, use "Planejamento em lote".</small></p>
+</div>
+
+<div class="card">
+    <div class="toolbar">
+        <input type="text" id="busca" placeholder="Buscar item por descrição, ata ou número..." style="min-width:320px" oninput="filtrarLinhas()">
+    </div>
+    <div style="overflow-x:auto;">
+    <table id="tabela-saldo">
+        <thead>
+            <tr>
+                <th>Ata</th><th>Item</th><th>Descrição</th><th class="num">Homologado</th>
+                {% for c in centros %}
+                <th title="{{ c.nome }}">{{ c.codigo }}</th>
+                {% endfor %}
+            </tr>
+        </thead>
+        <tbody>
+        {% for it in itens %}
+            <tr data-busca="{{ (it.descricao or '')|lower }} {{ it.numero_ata }} {{ it.numero_item }}">
+                <td>{{ it.numero_ata }}</td>
+                <td>{{ it.numero_item }}</td>
+                <td>{{ it.descricao or "—" }}</td>
+                <td class="num">{{ "%.2f"|format(it.quantidade_homologada or 0) }}</td>
+                {% for c in centros %}
+                    {% set saldo = it.saldos.get(c.codigo) %}
+                    <td class="num" {% if saldo is not none and saldo < 0 %}style="color: var(--vermelho); font-weight:700;"{% endif %}>
+                        {{ "%.2f"|format(saldo) if saldo is not none else "—" }}
+                    </td>
+                {% endfor %}
+            </tr>
+        {% else %}
+            <tr><td colspan="{{ 4 + centros|length }}">Nenhum item planejado para este pregão.</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    </div>
+</div>
+
+<script>
+    function filtrarLinhas() {
+        const termo = document.getElementById('busca').value.toLowerCase();
+        document.querySelectorAll('#tabela-saldo tbody tr').forEach(function (tr) {
+            const alvo = tr.getAttribute('data-busca') || '';
+            tr.style.display = alvo.includes(termo) ? '' : 'none';
+        });
+    }
+</script>
+{% endblock %}

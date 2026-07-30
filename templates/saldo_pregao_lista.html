@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Saldo por Pregão{% endblock %}
+{% block content %}
+
+<div class="card">
+    <h3>Saldo por pregão</h3>
+    <p><small class="ajuda">Escolha um pregão para ver o saldo de todos os itens, lado a lado por centro de custo — mesma visão da planilha "Saldo Geral" que a DIARP já usava.</small></p>
+    <table>
+        <thead><tr><th>Pregão</th><th class="num">Atas vinculadas</th><th></th></tr></thead>
+        <tbody>
+        {% for p in pregoes %}
+            <tr>
+                <td>{{ p.numero_compra }}/{{ p.ano_compra }}</td>
+                <td class="num">{{ p.qtd_atas }}</td>
+                <td><a class="btn" href="{{ url_for('saldo_pregao_grade', pregao_id=p.numero_controle_pncp_compra) }}">Ver saldo</a></td>
+            </tr>
+        {% else %}
+            <tr><td colspan="3">Nenhum pregão sincronizado ainda.</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

@@ -51,6 +51,7 @@
     <h1>Controle de Saldos ARP — CEFET/RJ (UASG 153010)</h1>
     <nav>
         <a href="{{ url_for('dashboard') }}" class="{{ 'ativo' if request.endpoint=='dashboard' }}">Saldos</a>
+        <a href="{{ url_for('saldo_pregao_lista') }}" class="{{ 'ativo' if request.endpoint and 'saldo_pregao' in request.endpoint }}">Saldo por Pregão</a>
         <a href="{{ url_for('planejamento') }}" class="{{ 'ativo' if request.endpoint=='planejamento' }}">Planejamento</a>
         <a href="{{ url_for('novo_pedido_form') }}" class="{{ 'ativo' if request.endpoint and 'novo_pedido' in request.endpoint }}">Novo Pedido</a>
         <a href="{{ url_for('pedidos') }}" class="{{ 'ativo' if request.endpoint=='pedidos' }}">Pedidos</a>

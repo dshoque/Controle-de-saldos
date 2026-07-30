@@ -21,10 +21,16 @@
         </thead>
         <tbody>
         {% for p in pedidos %}
+            {% set ajustes = ajustes_map.get(p.id, []) %}
             <tr>
                 <td>{{ p.id }}</td><td>{{ p.data_pedido }}</td><td>{{ p.numero_ata }}</td><td>{{ p.numero_item }}</td>
                 <td>{{ p.descricao or "—" }}</td><td>{{ p.centro_custo }}</td>
-                <td class="num">{{ "%.2f"|format(p.quantidade_solicitada) }}</td>
+                <td class="num">
+                    {{ "%.2f"|format(p.quantidade_solicitada) }}
+                    {% if ajustes %}
+                    <span class="badge badge-neutro" title="{% for a in ajustes %}{{ '%.2f'|format(a.quantidade_anterior) }} → {{ '%.2f'|format(a.quantidade_nova) }}: {{ a.observacao }} ({{ a.criado_em }}){% if not loop.last %} | {% endif %}{% endfor %}">corrigido</span>
+                    {% endif %}
+                </td>
                 <td>
                     {% if p.status == 'Empenhado' %}<span class="badge badge-ok">{{ p.status }}</span>
                     {% elif p.status == 'Não Empenhado' %}<span class="badge badge-neutro">{{ p.status }}</span>
@@ -45,13 +51,26 @@
                     {% endif %}
                 </td>
                 <td>
-                    <form method="post" action="{{ url_for('pedido_status', pedido_id=p.id) }}" class="toolbar" style="gap:4px;">
-                        <select name="status">
-                            {% for s in status_validos %}
-                            <option value="{{ s }}" {{ 'selected' if s == p.status }}>{{ s }}</option>
-                            {% endfor %}
-                        </select>
-                        <button type="submit" class="secundario">Atualizar</button>
+                    <div class="toolbar" style="gap:4px; flex-wrap: nowrap;">
+                        <form method="post" action="{{ url_for('pedido_status', pedido_id=p.id) }}" class="toolbar" style="gap:4px;">
+                            <select name="status">
+                                {% for s in status_validos %}
+                                <option value="{{ s }}" {{ 'selected' if s == p.status }}>{{ s }}</option>
+                                {% endfor %}
+                            </select>
+                            <button type="submit" class="secundario">Atualizar</button>
+                        </form>
+                        <button type="button" class="secundario" onclick="document.getElementById('editar-{{ p.id }}').style.display='table-row';this.closest('td').querySelector('.toolbar').style.display='none';">Editar qtd.</button>
+                    </div>
+                </td>
+            </tr>
+            <tr id="editar-{{ p.id }}" style="display:none;">
+                <td colspan="10">
+                    <form method="post" action="{{ url_for('pedido_editar', pedido_id=p.id) }}" class="toolbar">
+                        <small class="ajuda" style="margin:0;">Corrigir quantidade divergente do PDF anexado:</small>
+                        <input type="number" name="quantidade_nova" min="0" step="any" value="{{ '%.2f'|format(p.quantidade_solicitada) }}" style="width:110px;" required>
+                        <input type="text" name="observacao" placeholder="Motivo da correção (obrigatório)" style="min-width:320px;" required>
+                        <button type="submit">Salvar correção</button>
                     </form>
                 </td>
             </tr>
