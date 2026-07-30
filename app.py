@@ -1,7 +1,9 @@
+import csv
 import io
 import json
 import os
 import secrets
+import zipfile
 from datetime import date
 from functools import wraps
 
@@ -64,6 +66,9 @@ def calcular_saldos(conn, uasg=UASG_PADRAO):
             i.descricao,
             i.unidade,
             i.quantidade_homologada,
+            a.numero_controle_pncp_compra,
+            COALESCE(pc.liberado, FALSE) AS pregao_liberado,
+            pc.prazo_final AS pregao_prazo_final,
             COALESCE((
                 SELECT SUM(pe.quantidade_solicitada) FROM pedidos pe
                 WHERE pe.numero_ata = p.numero_ata AND pe.uasg = p.uasg AND pe.numero_item = p.numero_item
@@ -71,6 +76,9 @@ def calcular_saldos(conn, uasg=UASG_PADRAO):
             ), 0) AS usado
         FROM planejamento p
         LEFT JOIN itens i ON i.numero_ata = p.numero_ata AND i.uasg = p.uasg AND i.numero_item = p.numero_item
+        LEFT JOIN arps a ON a.numero_ata = p.numero_ata AND a.uasg = p.uasg
+        LEFT JOIN pregoes_controle pc ON pc.numero_controle_pncp_compra = a.numero_controle_pncp_compra
+                                       AND pc.uasg = p.uasg
         WHERE p.uasg = %s
         ORDER BY p.numero_ata, p.numero_item, p.centro_custo
     """, (uasg,)).fetchall()
@@ -81,6 +89,16 @@ def calcular_saldos(conn, uasg=UASG_PADRAO):
         d["saldo"] = d["quantidade_planejada"] - d["usado"]
         resultado.append(d)
     return resultado
+
+
+def pregao_aberto(linha):
+    """Confere se o pregão de uma linha de calcular_saldos() está liberado e dentro do prazo."""
+    if not linha.get("pregao_liberado"):
+        return False
+    prazo = linha.get("pregao_prazo_final")
+    if not prazo:
+        return True
+    return date.today().isoformat() <= str(prazo)
 
 
 def somar_planejamento_por_item(conn, uasg=UASG_PADRAO):
@@ -276,15 +294,41 @@ def planejamento_lote_lista():
     conn = db.get_conn()
     try:
         pregoes = conn.execute("""
-            SELECT numero_controle_pncp_compra, numero_compra, ano_compra, COUNT(*) AS qtd_atas
-            FROM arps
-            WHERE uasg = %s AND numero_controle_pncp_compra IS NOT NULL AND numero_controle_pncp_compra <> ''
-            GROUP BY numero_controle_pncp_compra, numero_compra, ano_compra
-            ORDER BY ano_compra DESC, numero_compra DESC
+            SELECT a.numero_controle_pncp_compra, a.numero_compra, a.ano_compra, COUNT(*) AS qtd_atas,
+                   COALESCE(pc.liberado, FALSE) AS liberado, pc.prazo_final
+            FROM arps a
+            LEFT JOIN pregoes_controle pc ON pc.numero_controle_pncp_compra = a.numero_controle_pncp_compra
+                                           AND pc.uasg = a.uasg
+            WHERE a.uasg = %s AND a.numero_controle_pncp_compra IS NOT NULL AND a.numero_controle_pncp_compra <> ''
+            GROUP BY a.numero_controle_pncp_compra, a.numero_compra, a.ano_compra, pc.liberado, pc.prazo_final
+            ORDER BY a.ano_compra DESC, a.numero_compra DESC
         """, (UASG_PADRAO,)).fetchall()
         return render_template("planejamento_lote_lista.html", pregoes=pregoes)
     finally:
         conn.close()
+
+
+@app.route("/planejamento/lote/<path:pregao_id>/liberar", methods=["POST"])
+@requer_login
+def planejamento_lote_liberar(pregao_id):
+    liberado = request.form.get("liberado") == "on"
+    prazo_final = request.form.get("prazo_final", "").strip() or None
+    conn = db.get_conn()
+    try:
+        conn.execute("""
+            INSERT INTO pregoes_controle (numero_controle_pncp_compra, uasg, liberado, prazo_final, atualizado_em)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (numero_controle_pncp_compra, uasg) DO UPDATE SET
+                liberado = excluded.liberado, prazo_final = excluded.prazo_final, atualizado_em = excluded.atualizado_em
+        """, (pregao_id, UASG_PADRAO, liberado, prazo_final, db.agora()))
+        conn.commit()
+        if liberado:
+            flash(f"Pregão liberado para solicitação{f' até {prazo_final}' if prazo_final else ''}.", "sucesso")
+        else:
+            flash("Pregão fechado para solicitação.", "sucesso")
+    finally:
+        conn.close()
+    return redirect(url_for("planejamento_lote_lista"))
 
 
 @app.route("/planejamento/lote/<path:pregao_id>", methods=["GET", "POST"])
@@ -516,7 +560,8 @@ def solicitar_form(token):
         centro = conn.execute("SELECT codigo, nome FROM centros_custo WHERE token=%s", (token,)).fetchone()
         if not centro:
             abort(404)
-        itens = [s for s in calcular_saldos(conn) if s["centro_custo"] == centro["codigo"]]
+        itens = [s for s in calcular_saldos(conn)
+                 if s["centro_custo"] == centro["codigo"] and pregao_aberto(s)]
         return render_template("solicitar.html", centro=centro, itens=itens, token=token)
     finally:
         conn.close()
@@ -538,7 +583,17 @@ def solicitar_confirmar(token):
             flash("O anexo precisa ser um arquivo .pdf.", "erro")
             return redirect(url_for("solicitar_form", token=token))
 
-        saldos_centro = [s for s in calcular_saldos(conn) if s["centro_custo"] == centro["codigo"]]
+        saldos_centro = [s for s in calcular_saldos(conn)
+                          if s["centro_custo"] == centro["codigo"] and pregao_aberto(s)]
+
+        # Reenvio: o que já está "Solicitado" para este item vai ser substituído (não somado),
+        # então devolve essa quantidade ao saldo disponível antes de validar o novo valor.
+        pendentes = conn.execute("""
+            SELECT numero_ata, numero_item, SUM(quantidade_solicitada) AS total
+            FROM pedidos WHERE uasg=%s AND centro_custo=%s AND status='Solicitado'
+            GROUP BY numero_ata, numero_item
+        """, (UASG_PADRAO, centro["codigo"])).fetchall()
+        pendentes_map = {(p["numero_ata"], p["numero_item"]): p["total"] for p in pendentes}
 
         pedidos_a_criar = []
         erros = []
@@ -554,10 +609,11 @@ def solicitar_confirmar(token):
                 continue
             if quantidade <= 0:
                 continue
-            if quantidade - saldo["saldo"] > 1e-6:
+            saldo_efetivo = saldo["saldo"] + pendentes_map.get((saldo["numero_ata"], saldo["numero_item"]), 0)
+            if quantidade - saldo_efetivo > 1e-6:
                 erros.append(
                     f"Item {saldo['numero_item']} (ata {saldo['numero_ata']}): pedido de {quantidade:.2f} "
-                    f"excede o saldo disponível de {saldo['saldo']:.2f}."
+                    f"excede o saldo disponível de {saldo_efetivo:.2f}."
                 )
                 continue
             pedidos_a_criar.append((saldo["numero_ata"], saldo["numero_item"], quantidade))
@@ -581,6 +637,13 @@ def solicitar_confirmar(token):
         solicitacao_id = solicitacao["id"]
 
         for numero_ata, numero_item, quantidade in pedidos_a_criar:
+            # Reenvio antes do prazo: o pedido anterior ainda não decidido (Solicitado) é substituído
+            # pelo novo, sem apagar o histórico nem o PDF antigo. Itens já Empenhado/Não Empenhado
+            # (decisão já tomada pela DIARP) não são tocados.
+            conn.execute("""
+                UPDATE pedidos SET status='Substituído', atualizado_em=%s
+                WHERE numero_ata=%s AND uasg=%s AND numero_item=%s AND centro_custo=%s AND status='Solicitado'
+            """, (ts, numero_ata, UASG_PADRAO, numero_item, centro["codigo"]))
             conn.execute("""
                 INSERT INTO pedidos (solicitacao_id, data_pedido, numero_ata, uasg, numero_item, centro_custo,
                                       quantidade_solicitada, status, criado_em, atualizado_em)
@@ -725,6 +788,144 @@ def modelo_pedido_xlsx():
         buf.seek(0)
         return send_file(buf, as_attachment=True, download_name="modelo_pedido.xlsx",
                           mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    finally:
+        conn.close()
+
+
+# -------------------------------------------------------------- manutenção --
+# Expurgo de PDF vencido, exportação/exclusão de atas com vigência encerrada e backup de segurança.
+# Tudo disparado manualmente por botão — sem depender de agendador externo.
+
+SQL_PDFS_ELEGIVEIS = """
+    SELECT s.id, s.centro_custo, s.nome_arquivo_pdf, s.data_solicitacao, MAX(pc.prazo_final) AS prazo_mais_recente
+    FROM solicitacoes s
+    JOIN pedidos pe ON pe.solicitacao_id = s.id
+    JOIN arps a ON a.numero_ata = pe.numero_ata AND a.uasg = pe.uasg
+    LEFT JOIN pregoes_controle pc ON pc.numero_controle_pncp_compra = a.numero_controle_pncp_compra AND pc.uasg = a.uasg
+    WHERE s.conteudo_pdf IS NOT NULL
+    GROUP BY s.id, s.centro_custo, s.nome_arquivo_pdf, s.data_solicitacao
+    HAVING MAX(pc.prazo_final) IS NOT NULL AND MAX(pc.prazo_final)::date <= (CURRENT_DATE - INTERVAL '1 month')
+"""
+
+
+def _linhas_para_csv_bytes(linhas):
+    buf = io.StringIO()
+    if linhas:
+        writer = csv.DictWriter(buf, fieldnames=list(linhas[0].keys()))
+        writer.writeheader()
+        for linha in linhas:
+            writer.writerow(dict(linha))
+    return buf.getvalue().encode("utf-8-sig")
+
+
+@app.route("/manutencao")
+@requer_login
+def manutencao():
+    conn = db.get_conn()
+    try:
+        pdfs_elegiveis = conn.execute(SQL_PDFS_ELEGIVEIS).fetchall()
+
+        atas_vencidas = conn.execute("""
+            SELECT numero_ata, data_vigencia_fim,
+                   (data_vigencia_fim::date <= CURRENT_DATE - INTERVAL '1 month') AS elegivel_exclusao
+            FROM arps
+            WHERE uasg = %s AND data_vigencia_fim IS NOT NULL AND data_vigencia_fim <> ''
+                  AND data_vigencia_fim::date <= CURRENT_DATE
+            ORDER BY data_vigencia_fim
+        """, (UASG_PADRAO,)).fetchall()
+
+        return render_template("manutencao.html", pdfs_elegiveis=pdfs_elegiveis, atas_vencidas=atas_vencidas)
+    finally:
+        conn.close()
+
+
+@app.route("/manutencao/pdfs/expurgar", methods=["POST"])
+@requer_login
+def manutencao_expurgar_pdfs():
+    conn = db.get_conn()
+    try:
+        ids = [r["id"] for r in conn.execute(SQL_PDFS_ELEGIVEIS).fetchall()]
+        if ids:
+            conn.execute("UPDATE solicitacoes SET conteudo_pdf = NULL WHERE id = ANY(%s)", (ids,))
+            conn.commit()
+        flash(f"{len(ids)} PDF(s) expurgado(s) (mais de 1 mês após o prazo do pregão).", "sucesso")
+    finally:
+        conn.close()
+    return redirect(url_for("manutencao"))
+
+
+@app.route("/manutencao/atas/<path:numero_ata>/csv")
+@requer_login
+def manutencao_ata_csv(numero_ata):
+    conn = db.get_conn()
+    try:
+        linhas = conn.execute("""
+            SELECT i.numero_ata, i.numero_item, i.descricao, p.centro_custo,
+                   COALESCE(p.quantidade_planejada, 0) AS quantidade_planejada,
+                   COALESCE((
+                       SELECT SUM(pe.quantidade_solicitada) FROM pedidos pe
+                       WHERE pe.numero_ata = i.numero_ata AND pe.uasg = i.uasg AND pe.numero_item = i.numero_item
+                             AND pe.centro_custo = p.centro_custo AND pe.status = 'Empenhado'
+                   ), 0) AS empenhado,
+                   COALESCE((
+                       SELECT SUM(pe.quantidade_solicitada) FROM pedidos pe
+                       WHERE pe.numero_ata = i.numero_ata AND pe.uasg = i.uasg AND pe.numero_item = i.numero_item
+                             AND pe.centro_custo = p.centro_custo AND pe.status = 'Solicitado'
+                   ), 0) AS solicitado_pendente
+            FROM itens i
+            LEFT JOIN planejamento p ON p.numero_ata = i.numero_ata AND p.uasg = i.uasg AND p.numero_item = i.numero_item
+            WHERE i.numero_ata = %s AND i.uasg = %s
+            ORDER BY i.numero_item, p.centro_custo
+        """, (numero_ata, UASG_PADRAO)).fetchall()
+
+        conteudo = _linhas_para_csv_bytes(linhas)
+        nome = f"ata_{numero_ata.replace('/', '-')}.csv"
+        return send_file(io.BytesIO(conteudo), as_attachment=True, download_name=nome, mimetype="text/csv")
+    finally:
+        conn.close()
+
+
+@app.route("/manutencao/atas/<path:numero_ata>/excluir", methods=["POST"])
+@requer_login
+def manutencao_ata_excluir(numero_ata):
+    conn = db.get_conn()
+    try:
+        elegivel = conn.execute("""
+            SELECT (data_vigencia_fim::date <= CURRENT_DATE - INTERVAL '1 month') AS ok
+            FROM arps WHERE numero_ata=%s AND uasg=%s AND data_vigencia_fim IS NOT NULL AND data_vigencia_fim <> ''
+        """, (numero_ata, UASG_PADRAO)).fetchone()
+        if not elegivel or not elegivel["ok"]:
+            flash("Esta ata ainda não passou 1 mês do fim da vigência — exclusão bloqueada.", "erro")
+            return redirect(url_for("manutencao"))
+
+        conn.execute("DELETE FROM pedidos WHERE numero_ata=%s AND uasg=%s", (numero_ata, UASG_PADRAO))
+        conn.execute("DELETE FROM planejamento WHERE numero_ata=%s AND uasg=%s", (numero_ata, UASG_PADRAO))
+        conn.execute("DELETE FROM empenhos WHERE numero_ata=%s AND uasg=%s", (numero_ata, UASG_PADRAO))
+        conn.execute("DELETE FROM itens WHERE numero_ata=%s AND uasg=%s", (numero_ata, UASG_PADRAO))
+        conn.execute("DELETE FROM arps WHERE numero_ata=%s AND uasg=%s", (numero_ata, UASG_PADRAO))
+        conn.commit()
+        flash(f"Dados da ata {numero_ata} excluídos do sistema.", "sucesso")
+    finally:
+        conn.close()
+    return redirect(url_for("manutencao"))
+
+
+@app.route("/manutencao/backup.zip")
+@requer_login
+def manutencao_backup():
+    conn = db.get_conn()
+    try:
+        planejamento_rows = conn.execute(
+            "SELECT * FROM planejamento ORDER BY numero_ata, numero_item, centro_custo").fetchall()
+        pedidos_rows = conn.execute("SELECT * FROM pedidos ORDER BY id").fetchall()
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("planejamento.csv", _linhas_para_csv_bytes(planejamento_rows))
+            zf.writestr("pedidos.csv", _linhas_para_csv_bytes(pedidos_rows))
+        buf.seek(0)
+        nome = f"backup_{date.today().isoformat()}.zip"
+        return send_file(buf, as_attachment=True, download_name=nome, mimetype="application/zip")
     finally:
         conn.close()
 

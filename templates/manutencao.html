@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Manutenção{% endblock %}
+{% block content %}
+
+<div class="card">
+    <div class="toolbar" style="justify-content: space-between;">
+        <div>
+            <strong>Backup de segurança</strong>
+            <small class="ajuda" style="margin-top:2px;">Exporta planejamento e pedidos (os únicos dados que não existem em nenhum outro lugar) em CSV, dentro de um .zip.</small>
+        </div>
+        <a class="btn" href="{{ url_for('manutencao_backup') }}">Baixar backup completo</a>
+    </div>
+</div>
+
+<div class="card">
+    <h3>PDFs elegíveis para expurgo</h3>
+    <p><small class="ajuda">Anexos de solicitações cujo pregão relacionado já passou 1 mês do prazo final. O download continua funcionando desde o envio até aqui — a partir deste expurgo, o arquivo deixa de existir no sistema (o registro do pedido continua, só o PDF é removido).</small></p>
+    <table>
+        <thead><tr><th>Solicitação</th><th>Centro de custo</th><th>Arquivo</th><th>Enviado em</th><th>Prazo do pregão</th></tr></thead>
+        <tbody>
+        {% for p in pdfs_elegiveis %}
+            <tr>
+                <td>#{{ p.id }}</td><td>{{ p.centro_custo }}</td><td>{{ p.nome_arquivo_pdf }}</td>
+                <td>{{ p.data_solicitacao }}</td><td>{{ p.prazo_mais_recente }}</td>
+            </tr>
+        {% else %}
+            <tr><td colspan="5">Nenhum PDF elegível para expurgo no momento.</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% if pdfs_elegiveis %}
+    <form method="post" action="{{ url_for('manutencao_expurgar_pdfs') }}" style="margin-top:12px;"
+          onsubmit="return confirm('Expurgar {{ pdfs_elegiveis|length }} PDF(s)? Essa ação não pode ser desfeita.');">
+        <button type="submit" class="perigo">Expurgar PDFs vencidos</button>
+    </form>
+    {% endif %}
+</div>
+
+<div class="card">
+    <h3>Atas com vigência encerrada</h3>
+    <p><small class="ajuda">O CSV fica disponível durante toda a janela; a exclusão só libera depois de 1 mês do fim da vigência.</small></p>
+    <table>
+        <thead><tr><th>Ata</th><th>Vigência encerrada em</th><th></th><th></th></tr></thead>
+        <tbody>
+        {% for a in atas_vencidas %}
+            <tr>
+                <td>{{ a.numero_ata }}</td><td>{{ a.data_vigencia_fim }}</td>
+                <td><a class="btn secundario" href="{{ url_for('manutencao_ata_csv', numero_ata=a.numero_ata) }}">Baixar CSV</a></td>
+                <td>
+                    {% if a.elegivel_exclusao %}
+                    <form method="post" action="{{ url_for('manutencao_ata_excluir', numero_ata=a.numero_ata) }}"
+                          onsubmit="return confirm('Excluir definitivamente os dados da ata {{ a.numero_ata }}? Baixe o CSV antes, se ainda não baixou. Essa ação não pode ser desfeita.');">
+                        <button type="submit" class="perigo">Excluir dados desta ata</button>
+                    </form>
+                    {% else %}
+                    <small class="ajuda">Exclusão libera 1 mês após a vigência</small>
+                    {% endif %}
+                </td>
+            </tr>
+        {% else %}
+            <tr><td colspan="4">Nenhuma ata com vigência encerrada ainda.</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

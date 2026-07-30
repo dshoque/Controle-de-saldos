@@ -10,7 +10,7 @@ load_dotenv()
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
-STATUS_VALIDOS = ("Solicitado", "Empenhado", "Não Empenhado")
+STATUS_VALIDOS = ("Solicitado", "Empenhado", "Não Empenhado", "Substituído")
 STATUS_ATIVOS = ("Solicitado", "Empenhado")  # contam contra o saldo
 
 SCHEMA = """
@@ -58,6 +58,15 @@ ALTER TABLE arps ADD COLUMN IF NOT EXISTS numero_compra TEXT;
 ALTER TABLE arps ADD COLUMN IF NOT EXISTS ano_compra TEXT;
 ALTER TABLE arps ADD COLUMN IF NOT EXISTS numero_controle_pncp_compra TEXT;
 ALTER TABLE centros_custo ADD COLUMN IF NOT EXISTS ordem INTEGER;
+
+CREATE TABLE IF NOT EXISTS pregoes_controle (
+    numero_controle_pncp_compra TEXT NOT NULL,
+    uasg TEXT NOT NULL,
+    liberado BOOLEAN NOT NULL DEFAULT FALSE,
+    prazo_final TEXT,
+    atualizado_em TEXT,
+    PRIMARY KEY (numero_controle_pncp_compra, uasg)
+);
 
 CREATE TABLE IF NOT EXISTS planejamento (
     id SERIAL PRIMARY KEY,

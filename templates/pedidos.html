@@ -28,6 +28,7 @@
                 <td>
                     {% if p.status == 'Empenhado' %}<span class="badge badge-ok">{{ p.status }}</span>
                     {% elif p.status == 'Não Empenhado' %}<span class="badge badge-neutro">{{ p.status }}</span>
+                    {% elif p.status == 'Substituído' %}<span class="badge badge-neutro" title="Substituído por um reenvio mais recente">{{ p.status }}</span>
                     {% else %}<span class="badge badge-erro" style="background:#fff3cd; color:#856404;">{{ p.status }}</span>
                     {% endif %}
                 </td>
